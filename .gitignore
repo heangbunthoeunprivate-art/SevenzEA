@@ -1,0 +1,21 @@
+# MetaTrader generated files
+*.ex5
+*.log
+*.tmp
+*.bak
+MQL5/Logs/
+MQL5/Profiles/Tester/
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+secrets.*
+*.key
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+

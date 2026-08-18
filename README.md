@@ -1,12 +1,15 @@
-# SevenzEA v1.44 — Bridge Ready
+# SevenzEA v1.45 — Strong Clear Signal
 
-SevenzEA is a standalone MQL5 Expert Advisor for MetaTrader 5 focused on XAUUSD. v1.44 keeps the v1.43 trading and safety architecture and adds optional, read-only telemetry for SE7EN GOLD IQ through the new SevenzEA Bridge.
+SevenzEA is a standalone MQL5 Expert Advisor for MetaTrader 5 focused on XAUUSD. v1.45 keeps the protected v1.44 execution architecture and adds staged, explainable signal strength for the EA panel, Bridge and SE7EN GOLD IQ website.
 
 ## Trading design
 
 - Market: XAUUSD/Gold only by default. Broker suffixes such as `XAUUSD.a` are supported through `InpSymbols`.
 - Profiles: Reference Hybrid Active (`M1` signal + `M5` confirmation + `M15` anchor, evaluated once per M5 bar) and Intraday (`M15` entry + `H1` confirmation + `H4` anchor).
 - Explainable IQ engine: every setup receives separate Long and Short scores from nine confluence checks.
+- Clear signal ladder: `WAIT` → `EARLY` → `READY` → `STRONG`; a news blackout is reported as `LOCKED`.
+- Independent M1, M5, M15 and H1 analysis prevents one shared bias from being repeated across every timeframe.
+- Signal telemetry includes readiness progress, directional edge, next required gate and a protected Entry/SL/TP plan only after qualification.
 - Regime detection: ADX classifies Trend, Range or Transition; the uncertain Transition zone is blocked by default.
 - Trend entries: entry/confirmation EMA alignment, H1/H4 anchor bias, ADX/DI, RSI, MACD, candle body, structure and anti-chase distance.
 - Range entries: Bollinger rejection, RSI extreme, wick/body rejection, low ADX, MACD turn, structure and higher-timeframe conflict checks.
@@ -77,6 +80,10 @@ This release fixes the M1 spread/ATR blocker by evaluating the active profile on
 
 This release adds a disabled-by-default Bearer-authenticated telemetry client and a separate Python Bridge. The Bridge merges EA IQ telemetry with the locally logged-in MT5 terminal's XAUUSD quote, account, position and daily-deal data. The public surface is read-only: it has no order, close, account-switch or settings routes. See [docs/BRIDGE_SETUP_KH.md](docs/BRIDGE_SETUP_KH.md).
 
+### v1.45 Strong Clear Signal
+
+This release adds evidence-based signal levels, independent timeframe readings, Long/Short pressure, directional edge, readiness progress, the exact next missing gate and qualified Entry/SL/TP/R:R telemetry. Execution thresholds and all safety locks remain active. See [docs/V1_45_STRONG_CLEAR_SIGNAL.md](docs/V1_45_STRONG_CLEAR_SIGNAL.md).
+
 ## Install
 
 1. Copy `Experts/SevenzEA.mq5` to `MT5 Data Folder/MQL5/Experts/SevenzEA.mq5`.
@@ -84,7 +91,7 @@ This release adds a disabled-by-default Bearer-authenticated telemetry client an
 3. Restart or refresh MT5 Navigator.
 4. Attach the EA to one chart. The chart symbol does not limit scanning.
 5. Enter the broker's exact symbol names in `InpSymbols` (including suffixes such as `XAUUSD.a`).
-6. Load `Presets/SevenzEA_Safe_Start.set` for signal-only setup, or `Presets/SevenzEA_v1.43_Reference_Hybrid_Demo.set` for Demo execution. The Demo preset cannot authorize a real account.
+6. Load `Presets/SevenzEA_Safe_Start.set` for signal-only setup, or `Presets/SevenzEA_v1.45_Strong_Clear_Signal_Demo.set` for Demo execution. The Demo preset cannot authorize a real account.
 7. Enable Algo Trading only after Strategy Tester and demo validation.
 
 Khmer setup instructions are in [docs/SETUP_KH.md](docs/SETUP_KH.md). Strategy and safety details are in [docs/STRATEGY.md](docs/STRATEGY.md) and [docs/SAFETY.md](docs/SAFETY.md).
@@ -95,6 +102,7 @@ Khmer setup instructions are in [docs/SETUP_KH.md](docs/SETUP_KH.md). Strategy a
 Experts/SevenzEA.mq5             Main EA source
 bridge/                          Read-only MT5/website telemetry service
 Presets/SevenzEA_Safe_Start.set Safe starting inputs
+Presets/SevenzEA_v1.45_Strong_Clear_Signal_Demo.set Demo execution preset
 docs/STRATEGY.md                 Signal and regime rules
 docs/SAFETY.md                   Safety-lock behavior
 docs/SETUP_KH.md                 Khmer installation guide

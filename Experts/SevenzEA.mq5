@@ -1,6 +1,6 @@
 #property copyright "SevenzEA"
-#property version   "1.43"
-#property description "XAUUSD Reference Hybrid Active: M15/M5/M1 confluence, M5 execution and adaptive spread control"
+#property version   "1.44"
+#property description "XAUUSD Hybrid Active with secure read-only SevenzEA Bridge telemetry"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -150,7 +150,14 @@ input double              InpTrailAtrMultiplier      = 1.20;
 
 input group "=== Manual protection ==="
 input bool                InpPauseNewEntries         = false;
-input string              InpOrderComment            = "SevenzEA-v1.43";
+input string              InpOrderComment            = "SevenzEA-v1.44";
+
+input group "=== Read-only SevenzEA Bridge ==="
+input bool                InpBridgeEnabled           = false;
+input string              InpBridgeUrl               = "http://127.0.0.1:8787";
+input string              InpBridgeAccessKey         = "";
+input int                 InpBridgeSendSeconds       = 5;
+input int                 InpBridgeTimeoutMs         = 1500;
 
 input group "=== On-chart control panel ==="
 input bool                InpShowControlPanel        = true;
@@ -218,6 +225,8 @@ int         g_spreadSampleIndex = 0;
 int         g_spreadSampleCount = 0;
 datetime    g_lastSpreadSample = 0;
 double      g_lastSpreadMedian = 0.0;
+datetime    g_lastBridgeSend   = 0;
+string      g_lastBridgeStatus = "Bridge disabled";
 
 #define PANEL_PREFIX "SEVENZ_PANEL_"
 
@@ -242,7 +251,7 @@ int OnInit()
    UpdateChartStatus();
    UpdateNewsGuard(true);
    ArrayInitialize(g_spreadSamples, 0.0);
-   Print("SevenzEA v1.43 Reference Hybrid Active initialized. Symbols=", ArraySize(g_states),
+   Print("SevenzEA v1.44 Bridge Ready initialized. Symbols=", ArraySize(g_states),
          " execution=", InpEnableOrderExecution,
          " realAllowed=", InpAllowRealAccount);
    return INIT_SUCCEEDED;
@@ -273,6 +282,7 @@ void OnTimer()
      {
       g_status = lockReason;
       UpdateChartStatus();
+      SendBridgeTelemetryIfDue();
       return;
      }
 
@@ -288,6 +298,7 @@ void OnTimer()
      }
 
    UpdateChartStatus();
+   SendBridgeTelemetryIfDue();
   }
 
 void OnTradeTransaction(const MqlTradeTransaction &trans,
@@ -1732,6 +1743,8 @@ bool ValidateInputs()
   {
    const bool valid =
       InpTimerSeconds >= 1 &&
+      InpBridgeSendSeconds >= 1 &&
+      InpBridgeTimeoutMs >= 250 && InpBridgeTimeoutMs <= 10000 &&
       InpMagicBase >= 1 &&
       InpMaxTradesPerDay >= 1 &&
       InpMaxOpenPositions >= 1 &&
@@ -1899,7 +1912,7 @@ void UpdateChartStatus()
    ReadTodayStats(trades, losses, pnl);
    const string accountMode =
       ((ENUM_ACCOUNT_TRADE_MODE)AccountInfoInteger(ACCOUNT_TRADE_MODE) == ACCOUNT_TRADE_MODE_REAL ? "REAL" : "DEMO/CONTEST");
-   Comment("SEVENZ EA v1.43 REFERENCE HYBRID ACTIVE\n",
+   Comment("SEVENZ EA v1.44 BRIDGE READY\n",
            "Account: ", accountMode, " | Execution: ", (InpEnableOrderExecution ? "ON" : "SIGNAL ONLY"), "\n",
            "Status: ", g_status, "\n",
            "Symbols: ", InpSymbols, "\n",
@@ -1912,7 +1925,7 @@ void CreateControlPanel()
    if(!InpShowControlPanel) return;
 
    PanelRect("BG", 0, 0, InpPanelWidth, 470, C'15,20,31', C'53,63,82');
-   PanelLabel("TITLE", 12, 10, "SEVENZ EA v1.43 | HYBRID ACTIVE", clrGold, 10);
+   PanelLabel("TITLE", 12, 10, "SEVENZ EA v1.44 | BRIDGE READY", clrGold, 10);
    PanelLabel("LINE1", 12, 38, "Initializing market data...", clrSilver, 9);
    PanelLabel("LINE2", 12, 58, "ADX", clrSilver, 9);
    PanelLabel("LINE3", 12, 78, "RSI", clrSilver, 9);
@@ -2132,6 +2145,184 @@ void CloseAllSevenzPositions()
       else failed++;
      }
    g_status = "CLOSE ALL: " + IntegerToString(closed) + " closed, " + IntegerToString(failed) + " failed";
+  }
+
+string JsonEscape(string value)
+  {
+   StringReplace(value, "\\", "\\\\");
+   StringReplace(value, "\"", "\\\"");
+   StringReplace(value, "\r", " ");
+   StringReplace(value, "\n", " ");
+   StringReplace(value, "\t", " ");
+   return value;
+  }
+
+string JsonBool(const bool value)
+  {
+   return value ? "true" : "false";
+  }
+
+string BridgeSignalBias(const SignalResult &signal, const bool ready)
+  {
+   if(!ready) return "WAIT";
+   if(signal.direction > 0) return "BUY";
+   if(signal.direction < 0) return "SELL";
+   if(signal.long_score >= signal.short_score + InpMinDirectionalEdge) return "WATCH BUY";
+   if(signal.short_score >= signal.long_score + InpMinDirectionalEdge) return "WATCH SELL";
+   return "WAIT";
+  }
+
+string BridgeEndpoint()
+  {
+   string root = InpBridgeUrl;
+   while(StringLen(root) > 0 && StringSubstr(root, StringLen(root) - 1, 1) == "/")
+      root = StringSubstr(root, 0, StringLen(root) - 1);
+   return root + "/v1/ea/telemetry";
+  }
+
+void SetBridgeStatus(const string value)
+  {
+   if(value == g_lastBridgeStatus) return;
+   g_lastBridgeStatus = value;
+   Print("SevenzEA Bridge: ", value);
+  }
+
+string BuildBridgeTelemetry()
+  {
+   const string symbol = PanelSymbol();
+   SignalResult scalpSignal, intradaySignal;
+   const bool scalpReady = BuildSignal(symbol, ScalpEntryTimeframe(), ScalpConfirmTimeframe(), scalpSignal);
+   const bool intradayReady = BuildSignal(symbol, PERIOD_M15, PERIOD_H1, intradaySignal);
+
+   SignalResult primary = scalpSignal;
+   bool primaryReady = scalpReady;
+   if(intradayReady && (!scalpReady || intradaySignal.quality > scalpSignal.quality))
+     {
+      primary = intradaySignal;
+      primaryReady = true;
+     }
+
+   const string bias = BridgeSignalBias(primary, primaryReady);
+   const int requiredQuality = (int)MathMin(100.0, (double)(InpQualityThreshold +
+                                            (IsAsiaSession() ? InpAsiaQualityBonus : 0)));
+   const bool signalQualified = primaryReady && primary.direction != 0 &&
+                                primary.quality >= requiredQuality &&
+                                (!InpUseConfluenceEngine || primary.votes >= InpMinConfluenceVotes) &&
+                                !g_newsBlocked;
+
+   double atrValues[3];
+   double atrPoints = 0.0;
+   if(ReadATR(symbol, ScalpVolatilityTimeframe(), atrValues))
+     {
+      const double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
+      if(point > 0.0) atrPoints = atrValues[1] / point;
+     }
+
+   int trades = 0, losses = 0;
+   double dayPnl = 0.0;
+   ReadTodayStats(trades, losses, dayPnl);
+   int wins = 0;
+   double grossProfit = 0.0, grossLoss = 0.0, averagePnl = 0.0;
+   ReadPerformanceStats(wins, grossProfit, grossLoss, averagePnl);
+   int openCount = 0;
+   double openPnl = 0.0;
+   ReadOpenStats(openCount, openPnl);
+   const double winRate = (trades > 0 ? 100.0 * wins / trades : 0.0);
+   const double profitFactor = (grossLoss > 0.0 ? grossProfit / grossLoss : (grossProfit > 0.0 ? 99.0 : 0.0));
+   const double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+   const double drawdown = (g_peakEquity > 0.0 ? 100.0 * MathMax(0.0, g_peakEquity - equity) / g_peakEquity : 0.0);
+   const string signalReason = (primaryReady ? (primary.direction == 0 ? primary.veto : primary.reason) : "Market data loading");
+
+   string json = "{";
+   json += "\"ea\":{\"name\":\"SevenzEA\",\"version\":\"1.44\",\"mode\":\"READ_ONLY_TELEMETRY\"},";
+   json += "\"symbol\":\"" + JsonEscape(symbol) + "\",";
+   json += "\"serverTime\":" + IntegerToString((long)TimeTradeServer()) + ",";
+   json += "\"market\":{";
+   json += "\"session\":\"" + JsonEscape(CurrentSessionName()) + "\",";
+   json += "\"liquidity\":\"EA LIVE SNAPSHOT\",";
+   json += "\"atrM5\":" + DoubleToString(atrPoints, 1) + ",";
+   json += "\"atrSpike\":" + DoubleToString(g_lastAtrRatio, 2);
+   json += "},";
+   json += "\"signal\":{";
+   json += "\"bias\":\"" + JsonEscape(bias) + "\",";
+   json += "\"score\":" + IntegerToString(primaryReady ? primary.quality : 0) + ",";
+   json += "\"votes\":" + IntegerToString(primaryReady ? primary.votes : 0) + ",";
+   json += "\"requiredVotes\":" + IntegerToString(InpMinConfluenceVotes) + ",";
+   json += "\"threshold\":" + IntegerToString(requiredQuality) + ",";
+   json += "\"qualified\":" + JsonBool(signalQualified) + ",";
+   json += "\"regime\":\"" + JsonEscape(primaryReady ? primary.regime : g_lastRegime) + "\",";
+   json += "\"reason\":\"" + JsonEscape(signalReason) + "\",";
+   json += "\"longScore\":" + IntegerToString(primaryReady ? primary.long_score : g_lastLongScore) + ",";
+   json += "\"shortScore\":" + IntegerToString(primaryReady ? primary.short_score : g_lastShortScore) + ",";
+   json += "\"timeframes\":[";
+   json += "{\"timeframe\":\"M1\",\"bias\":\"" + JsonEscape(BridgeSignalBias(scalpSignal, scalpReady)) + "\",\"reason\":\"Active scalp\"},";
+   json += "{\"timeframe\":\"M5\",\"bias\":\"" + JsonEscape(BridgeSignalBias(scalpSignal, scalpReady)) + "\",\"reason\":\"Scalp confirmation\"},";
+   json += "{\"timeframe\":\"M15\",\"bias\":\"" + JsonEscape(BridgeSignalBias(intradaySignal, intradayReady)) + "\",\"reason\":\"Intraday anchor\"}";
+   json += "]},";
+   json += "\"news\":{";
+   json += "\"clear\":" + JsonBool(!g_newsBlocked) + ",";
+   json += "\"title\":\"" + JsonEscape(g_newsEventName) + "\",";
+   json += "\"impact\":\"MT5 economic calendar\",";
+   json += "\"countdown\":\"" + JsonEscape(NewsCountdownText()) + "\",";
+   json += "\"restriction\":\"" + (g_newsBlocked ? "BLACKOUT" : "NONE") + "\"";
+   json += "},";
+   json += "\"execution\":{";
+   json += "\"autoTrade\":\"" + (g_runtimeAutoTrade ? "ON" : "OFF") + "\",";
+   json += "\"paused\":" + JsonBool(g_runtimePaused) + ",";
+   json += "\"status\":\"" + JsonEscape(g_status) + "\",";
+   json += "\"blockReason\":\"" + JsonEscape(g_lastVolumeReason) + "\",";
+   json += "\"openPositions\":" + IntegerToString(openCount) + ",";
+   json += "\"openPnl\":" + DoubleToString(openPnl, 2);
+   json += "},";
+   json += "\"performance\":{";
+   json += "\"dayPnl\":" + DoubleToString(dayPnl, 2) + ",";
+   json += "\"trades\":" + IntegerToString(trades) + ",";
+   json += "\"maxTrades\":" + IntegerToString(InpMaxTradesPerDay) + ",";
+   json += "\"winRate\":" + DoubleToString(winRate, 2) + ",";
+   json += "\"profitFactor\":" + DoubleToString(profitFactor, 2) + ",";
+   json += "\"drawdown\":" + DoubleToString(drawdown, 3);
+   json += "}";
+   json += "}";
+   return json;
+  }
+
+void SendBridgeTelemetryIfDue()
+  {
+   if(!InpBridgeEnabled || MQLInfoInteger(MQL_TESTER)) return;
+   if(StringLen(InpBridgeAccessKey) < 24)
+     {
+      SetBridgeStatus("LOCKED: access key is missing or too short");
+      return;
+     }
+   if(StringLen(InpBridgeUrl) < 8)
+     {
+      SetBridgeStatus("LOCKED: bridge URL is invalid");
+      return;
+     }
+
+   const datetime now = TimeCurrent();
+   if(g_lastBridgeSend > 0 && (now - g_lastBridgeSend) < InpBridgeSendSeconds) return;
+   g_lastBridgeSend = now;
+
+   const string payload = BuildBridgeTelemetry();
+   char body[];
+   const int copied = StringToCharArray(payload, body, 0, WHOLE_ARRAY, CP_UTF8);
+   if(copied > 0 && body[copied - 1] == 0) ArrayResize(body, copied - 1);
+
+   char response[];
+   string responseHeaders;
+   const string headers = "Content-Type: application/json\r\n" +
+                          "Authorization: Bearer " + InpBridgeAccessKey + "\r\n";
+   ResetLastError();
+   const int statusCode = WebRequest("POST", BridgeEndpoint(), headers, InpBridgeTimeoutMs,
+                                     body, response, responseHeaders);
+   if(statusCode == 200)
+      SetBridgeStatus("LIVE");
+   else if(statusCode == -1)
+      SetBridgeStatus("ERROR " + IntegerToString(GetLastError()) +
+                      " (allow URL in MT5 WebRequest settings)");
+   else
+      SetBridgeStatus("HTTP " + IntegerToString(statusCode));
   }
 
 string SignedMoney(const double value)

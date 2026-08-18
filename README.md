@@ -1,6 +1,6 @@
-# SevenzEA v1.43 — Reference Hybrid Active
+# SevenzEA v1.44 — Bridge Ready
 
-SevenzEA is a standalone MQL5 Expert Advisor for MetaTrader 5 focused on XAUUSD. v1.43 uses the supplied reference EA only to compare execution behavior; its source was not copied, and SevenzEA retains its own safety architecture.
+SevenzEA is a standalone MQL5 Expert Advisor for MetaTrader 5 focused on XAUUSD. v1.44 keeps the v1.43 trading and safety architecture and adds optional, read-only telemetry for SE7EN GOLD IQ through the new SevenzEA Bridge.
 
 ## Trading design
 
@@ -18,6 +18,7 @@ SevenzEA is a standalone MQL5 Expert Advisor for MetaTrader 5 focused on XAUUSD.
 - High-impact calendar protection covers USD plus CNY/JPY/AUD when Asia protection is enabled.
 - On-chart control panel shows live bias, quality, ADX, RSI, ATR, spread, session, daily P&L, positions, balance/equity, daily target, win rate, profit factor, average P&L and safety status.
 - Panel controls: Pause/Resume, Scalping toggle, Auto-Trade arm, Quality filter, double-confirm Close All and protected Reset Day.
+- Optional Bridge telemetry sends IQ, regime, session, news, execution and performance status to a local authenticated service. It is disabled by default and exposes no remote trade commands.
 
 ## Safety locks
 
@@ -72,6 +73,10 @@ This release adds M1/M5 active scalping, active 65/4/8 IQ defaults, broker-aware
 
 This release fixes the M1 spread/ATR blocker by evaluating the active profile once per M5 bar and using M5 ATR for execution-cost protection. It adds two-of-three M15/M5/M1 alignment, a 14 ADX floor, 30–70 RSI window, 1.5 ATR pullback allowance, a 60-point IQ floor and a 1.7× rolling-median spread-surge veto. It does not copy the reference bot's unsafe always-live behavior, 500-trade cap, rapid stacking or forced minimum-lot sizing. See [docs/V1_43_REFERENCE_HYBRID_ACTIVE.md](docs/V1_43_REFERENCE_HYBRID_ACTIVE.md).
 
+### v1.44 Bridge Ready
+
+This release adds a disabled-by-default Bearer-authenticated telemetry client and a separate Python Bridge. The Bridge merges EA IQ telemetry with the locally logged-in MT5 terminal's XAUUSD quote, account, position and daily-deal data. The public surface is read-only: it has no order, close, account-switch or settings routes. See [docs/BRIDGE_SETUP_KH.md](docs/BRIDGE_SETUP_KH.md).
+
 ## Install
 
 1. Copy `Experts/SevenzEA.mq5` to `MT5 Data Folder/MQL5/Experts/SevenzEA.mq5`.
@@ -88,8 +93,10 @@ Khmer setup instructions are in [docs/SETUP_KH.md](docs/SETUP_KH.md). Strategy a
 
 ```text
 Experts/SevenzEA.mq5             Main EA source
+bridge/                          Read-only MT5/website telemetry service
 Presets/SevenzEA_Safe_Start.set Safe starting inputs
 docs/STRATEGY.md                 Signal and regime rules
 docs/SAFETY.md                   Safety-lock behavior
 docs/SETUP_KH.md                 Khmer installation guide
+docs/BRIDGE_SETUP_KH.md          Khmer Bridge installation guide
 ```

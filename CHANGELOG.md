@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.44 — Bridge Ready
+
+- Added optional read-only EA telemetry with Bearer authentication.
+- Added a local FastAPI Bridge that merges EA IQ status with the logged-in MT5 terminal snapshot.
+- Added `/v1/health`, `/v1/ea/telemetry` and `/v1/snapshot`; no remote execution routes exist.
+- Added Windows setup, start and health-check scripts with automatic secret generation.
+- Added Khmer setup guidance for MT5 WebRequest and managed HTTPS tunnel configuration.
+- Kept v1.43 signal, execution, risk and safety behavior unchanged; Bridge telemetry is disabled by default.
+
 ## 1.43 — Reference Hybrid Active
 
 - Added M15/M5/M1 two-of-three direction alignment for the active profile.

@@ -1,0 +1,2 @@
+"""SevenzEA Bridge application package."""
+

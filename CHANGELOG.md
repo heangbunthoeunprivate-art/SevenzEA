@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.45 — Strong Clear Signal
+
+- Added `WAIT`, `EARLY`, `READY`, `STRONG` and news `LOCKED` signal stages.
+- Added independent M1, M5, M15 and H1 signal calculations to Bridge telemetry.
+- Fixed primary telemetry selection so a high-scoring WAIT setup cannot replace a qualified executable setup.
+- Added readiness progress, directional edge, Long/Short pressure and an exact next-gate explanation.
+- Added broker-normalized Entry, Stop Loss, Take Profit and Risk/Reward telemetry only for qualified signals.
+- Preserved the IQ threshold, vote gate, higher-timeframe veto, News Guard and all execution safety locks.
+
 ## 1.44 — Bridge Ready
 
 - Added optional read-only EA telemetry with Bearer authentication.

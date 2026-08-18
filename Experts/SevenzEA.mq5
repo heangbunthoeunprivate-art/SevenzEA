@@ -1,6 +1,6 @@
 #property copyright "SevenzEA"
-#property version   "1.44"
-#property description "XAUUSD Hybrid Active with secure read-only SevenzEA Bridge telemetry"
+#property version   "1.45"
+#property description "XAUUSD Strong Clear Signal: staged IQ conviction with secure Bridge telemetry"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -127,6 +127,9 @@ input int                 InpMacdSlowPeriod          = 26;
 input int                 InpMacdSignalPeriod        = 9;
 input double              InpMinCandleBodyAtr        = 0.12;
 input double              InpMaxEntryDistanceAtr     = 0.90;
+input int                 InpWatchSignalQuality      = 45;
+input int                 InpStrongSignalQuality     = 75;
+input int                 InpStrongSignalExtraVotes  = 1;
 
 input group "=== Reference Hybrid Active profile ==="
 input int                 InpReferenceMinAlignment   = 2;
@@ -150,7 +153,7 @@ input double              InpTrailAtrMultiplier      = 1.20;
 
 input group "=== Manual protection ==="
 input bool                InpPauseNewEntries         = false;
-input string              InpOrderComment            = "SevenzEA-v1.44";
+input string              InpOrderComment            = "SevenzEA-v1.45";
 
 input group "=== Read-only SevenzEA Bridge ==="
 input bool                InpBridgeEnabled           = false;
@@ -251,7 +254,7 @@ int OnInit()
    UpdateChartStatus();
    UpdateNewsGuard(true);
    ArrayInitialize(g_spreadSamples, 0.0);
-   Print("SevenzEA v1.44 Bridge Ready initialized. Symbols=", ArraySize(g_states),
+   Print("SevenzEA v1.45 Strong Clear Signal initialized. Symbols=", ArraySize(g_states),
          " execution=", InpEnableOrderExecution,
          " realAllowed=", InpAllowRealAccount);
    return INIT_SUCCEEDED;
@@ -741,6 +744,17 @@ bool BuildSignal(const string symbol,
       out.veto = "Higher-timeframe conflict veto";
    else if(buyCandidate || sellCandidate)
       out.veto = "Directional score conflict veto";
+   else
+     {
+      const int bestScore = (int)MathMax((double)out.long_score, (double)out.short_score);
+      const int edge = (int)MathAbs(out.long_score - out.short_score);
+      if(edge < InpMinDirectionalEdge)
+         out.veto = "Direction not clear yet";
+      else if(bestScore >= InpWatchSignalQuality)
+         out.veto = "Entry trigger not confirmed";
+      else
+         out.veto = "Confluence is still building";
+     }
 
    if(out.direction == 0)
      {
@@ -1775,6 +1789,9 @@ bool ValidateInputs()
       InpSpreadSurgeMultiplier > 1.0 &&
       InpSpreadWarmupSamples >= 3 && InpSpreadWarmupSamples <= 30 &&
       InpQualityThreshold >= 0 && InpQualityThreshold <= 100 &&
+      InpWatchSignalQuality >= 0 && InpWatchSignalQuality <= 100 &&
+      InpStrongSignalQuality >= InpWatchSignalQuality && InpStrongSignalQuality <= 100 &&
+      InpStrongSignalExtraVotes >= 0 && InpStrongSignalExtraVotes <= 5 &&
       InpDailyProfitTargetMoney > 0.0 &&
       InpFastEmaPeriod > 1 && InpSlowEmaPeriod > InpFastEmaPeriod &&
       InpConfirmEmaPeriod > InpSlowEmaPeriod &&
@@ -1912,7 +1929,7 @@ void UpdateChartStatus()
    ReadTodayStats(trades, losses, pnl);
    const string accountMode =
       ((ENUM_ACCOUNT_TRADE_MODE)AccountInfoInteger(ACCOUNT_TRADE_MODE) == ACCOUNT_TRADE_MODE_REAL ? "REAL" : "DEMO/CONTEST");
-   Comment("SEVENZ EA v1.44 BRIDGE READY\n",
+   Comment("SEVENZ EA v1.45 STRONG CLEAR SIGNAL\n",
            "Account: ", accountMode, " | Execution: ", (InpEnableOrderExecution ? "ON" : "SIGNAL ONLY"), "\n",
            "Status: ", g_status, "\n",
            "Symbols: ", InpSymbols, "\n",
@@ -1925,7 +1942,7 @@ void CreateControlPanel()
    if(!InpShowControlPanel) return;
 
    PanelRect("BG", 0, 0, InpPanelWidth, 470, C'15,20,31', C'53,63,82');
-   PanelLabel("TITLE", 12, 10, "SEVENZ EA v1.44 | BRIDGE READY", clrGold, 10);
+   PanelLabel("TITLE", 12, 10, "SEVENZ EA v1.45 | CLEAR SIGNAL", clrGold, 10);
    PanelLabel("LINE1", 12, 38, "Initializing market data...", clrSilver, 9);
    PanelLabel("LINE2", 12, 58, "ADX", clrSilver, 9);
    PanelLabel("LINE3", 12, 78, "RSI", clrSilver, 9);
@@ -2049,12 +2066,11 @@ void UpdateControlPanel()
 string ProfilePanelSummary(const string label, const SignalResult &signal, const bool ready)
   {
    if(!ready) return label + "     DATA WAIT";
-   string bias = "WAIT";
-   if(signal.direction > 0) bias = "BUY";
-   else if(signal.direction < 0) bias = "SELL";
-   else if(signal.long_score >= signal.short_score + InpMinDirectionalEdge) bias = "WATCH BUY";
-   else if(signal.short_score >= signal.long_score + InpMinDirectionalEdge) bias = "WATCH SELL";
-   return label + " " + bias + " Q" + IntegerToString(signal.quality) +
+   const int requiredQuality = RequiredSignalQuality();
+   const bool qualified = SignalPassesCoreGates(signal, ready, requiredQuality) && !g_newsBlocked;
+   const string bias = BridgeDisplayBias(signal, ready, qualified);
+   const string level = SignalLevel(signal, ready, requiredQuality, !g_newsBlocked);
+   return label + " " + level + " " + bias + " Q" + IntegerToString(signal.quality) +
           " V" + IntegerToString(signal.votes) + "/" + IntegerToString(InpMinConfluenceVotes) +
           " " + signal.regime;
   }
@@ -2162,14 +2178,128 @@ string JsonBool(const bool value)
    return value ? "true" : "false";
   }
 
-string BridgeSignalBias(const SignalResult &signal, const bool ready)
+int RequiredSignalQuality()
+  {
+   return (int)MathMin(100.0, (double)(InpQualityThreshold +
+                                      (IsAsiaSession() ? InpAsiaQualityBonus : 0)));
+  }
+
+int SignalDirectionalEdge(const SignalResult &signal)
+  {
+   return (int)MathAbs(signal.long_score - signal.short_score);
+  }
+
+int SignalDirectionHint(const SignalResult &signal, const bool ready)
+  {
+   if(!ready) return 0;
+   if(signal.direction != 0) return signal.direction;
+   if(signal.long_score >= signal.short_score + InpMinDirectionalEdge) return 1;
+   if(signal.short_score >= signal.long_score + InpMinDirectionalEdge) return -1;
+   return 0;
+  }
+
+bool SignalPassesCoreGates(const SignalResult &signal, const bool ready,
+                           const int requiredQuality)
+  {
+   return ready && signal.direction != 0 &&
+          signal.quality >= requiredQuality &&
+          (!InpUseConfluenceEngine || signal.votes >= InpMinConfluenceVotes);
+  }
+
+string SignalLevel(const SignalResult &signal, const bool ready,
+                   const int requiredQuality, const bool newsClear)
   {
    if(!ready) return "WAIT";
-   if(signal.direction > 0) return "BUY";
-   if(signal.direction < 0) return "SELL";
-   if(signal.long_score >= signal.short_score + InpMinDirectionalEdge) return "WATCH BUY";
-   if(signal.short_score >= signal.long_score + InpMinDirectionalEdge) return "WATCH SELL";
+   const bool corePassed = SignalPassesCoreGates(signal, ready, requiredQuality);
+   if(corePassed && !newsClear) return "LOCKED";
+   if(corePassed)
+     {
+      const int strongQuality = (int)MathMax((double)InpStrongSignalQuality,
+                                             (double)(requiredQuality + 10));
+      const int strongVotes = (int)MathMin(9.0, (double)(InpMinConfluenceVotes +
+                                                        InpStrongSignalExtraVotes));
+      if(signal.quality >= strongQuality && signal.votes >= strongVotes &&
+         SignalDirectionalEdge(signal) >= InpMinDirectionalEdge + 7)
+         return "STRONG";
+      return "READY";
+     }
+
+   if(SignalDirectionHint(signal, ready) != 0 && signal.quality >= InpWatchSignalQuality)
+      return "EARLY";
    return "WAIT";
+  }
+
+int SignalProgress(const SignalResult &signal, const bool ready, const int requiredQuality)
+  {
+   if(!ready) return 0;
+   const double qualityPart = (requiredQuality > 0 ?
+      MathMin(1.0, (double)signal.quality / requiredQuality) : 1.0) * 60.0;
+   const double votePart = (InpMinConfluenceVotes > 0 ?
+      MathMin(1.0, (double)signal.votes / InpMinConfluenceVotes) : 1.0) * 25.0;
+   const double edgePart = (InpMinDirectionalEdge > 0 ?
+      MathMin(1.0, (double)SignalDirectionalEdge(signal) / InpMinDirectionalEdge) : 1.0) * 15.0;
+   return (int)MathMin(100.0, MathRound(qualityPart + votePart + edgePart));
+  }
+
+string SignalNextGate(const SignalResult &signal, const bool ready,
+                      const int requiredQuality, const bool newsClear)
+  {
+   if(!ready) return "Waiting for closed-bar market data";
+   if(!newsClear) return "News Guard must clear before entry";
+   if(signal.direction == 0) return signal.veto;
+   if(InpUseConfluenceEngine && signal.votes < InpMinConfluenceVotes)
+      return "Need " + IntegerToString(InpMinConfluenceVotes - signal.votes) + " more confluence vote(s)";
+   if(signal.quality < requiredQuality)
+      return "Need " + IntegerToString(requiredQuality - signal.quality) + " more IQ point(s)";
+   return "All signal gates passed";
+  }
+
+int SignalRank(const SignalResult &signal, const bool ready, const int requiredQuality)
+  {
+   if(!ready) return -1;
+   int rank = signal.quality;
+   if(SignalDirectionHint(signal, ready) != 0) rank += 100;
+   if(signal.direction != 0) rank += 100;
+   if(SignalPassesCoreGates(signal, ready, requiredQuality)) rank += 200;
+   return rank;
+  }
+
+string BridgeSignalBias(const SignalResult &signal, const bool ready)
+  {
+   const int direction = SignalDirectionHint(signal, ready);
+   if(direction > 0) return "BUY";
+   if(direction < 0) return "SELL";
+   return "WAIT";
+  }
+
+string BridgeDisplayBias(const SignalResult &signal, const bool ready, const bool qualified)
+  {
+   const string direction = BridgeSignalBias(signal, ready);
+   if(direction == "WAIT") return "WAIT";
+   return qualified ? direction : "WATCH " + direction;
+  }
+
+bool BuildTelemetryPlan(const string symbol, const ENUM_SEVENZ_PROFILE profile,
+                        const SignalResult &signal, double &entry, double &sl,
+                        double &tp, double &rr)
+  {
+   entry = 0.0; sl = 0.0; tp = 0.0; rr = 0.0;
+   if(signal.direction == 0 || signal.atr <= 0.0) return false;
+   MqlTick tick;
+   if(!SymbolInfoTick(symbol, tick)) return false;
+
+   const double stopAtr = (profile == PROFILE_SCALPING ? InpScalpStopAtr : InpIntradayStopAtr);
+   const double takeAtr = (profile == PROFILE_SCALPING ? InpScalpTakeAtr : InpIntradayTakeAtr);
+   entry = (signal.direction > 0 ? tick.ask : tick.bid);
+   sl = (signal.direction > 0 ? entry - signal.atr * stopAtr : entry + signal.atr * stopAtr);
+   tp = (signal.direction > 0 ? entry + signal.atr * takeAtr : entry - signal.atr * takeAtr);
+   if(!RespectStopLevel(symbol, entry, signal.direction, sl, tp)) return false;
+
+   const double riskDistance = MathAbs(entry - sl);
+   const double rewardDistance = MathAbs(tp - entry);
+   if(riskDistance <= 0.0) return false;
+   rr = rewardDistance / riskDistance;
+   return true;
   }
 
 string BridgeEndpoint()
@@ -2190,25 +2320,31 @@ void SetBridgeStatus(const string value)
 string BuildBridgeTelemetry()
   {
    const string symbol = PanelSymbol();
-   SignalResult scalpSignal, intradaySignal;
+   SignalResult scalpSignal, m5Signal, intradaySignal, h1Signal;
    const bool scalpReady = BuildSignal(symbol, ScalpEntryTimeframe(), ScalpConfirmTimeframe(), scalpSignal);
+   const bool m5Ready = BuildSignal(symbol, PERIOD_M5, PERIOD_M15, m5Signal);
    const bool intradayReady = BuildSignal(symbol, PERIOD_M15, PERIOD_H1, intradaySignal);
+   const bool h1Ready = BuildSignal(symbol, PERIOD_H1, PERIOD_H4, h1Signal);
+   const int requiredQuality = RequiredSignalQuality();
 
    SignalResult primary = scalpSignal;
    bool primaryReady = scalpReady;
-   if(intradayReady && (!scalpReady || intradaySignal.quality > scalpSignal.quality))
+   ENUM_SEVENZ_PROFILE primaryProfile = PROFILE_SCALPING;
+   if(SignalRank(intradaySignal, intradayReady, requiredQuality) >
+      SignalRank(scalpSignal, scalpReady, requiredQuality))
      {
       primary = intradaySignal;
       primaryReady = true;
+      primaryProfile = PROFILE_INTRADAY;
      }
 
-   const string bias = BridgeSignalBias(primary, primaryReady);
-   const int requiredQuality = (int)MathMin(100.0, (double)(InpQualityThreshold +
-                                            (IsAsiaSession() ? InpAsiaQualityBonus : 0)));
-   const bool signalQualified = primaryReady && primary.direction != 0 &&
-                                primary.quality >= requiredQuality &&
-                                (!InpUseConfluenceEngine || primary.votes >= InpMinConfluenceVotes) &&
-                                !g_newsBlocked;
+   const bool coreQualified = SignalPassesCoreGates(primary, primaryReady, requiredQuality);
+   const bool signalQualified = coreQualified && !g_newsBlocked;
+   const string bias = BridgeDisplayBias(primary, primaryReady, signalQualified);
+   const string level = SignalLevel(primary, primaryReady, requiredQuality, !g_newsBlocked);
+   const int progress = SignalProgress(primary, primaryReady, requiredQuality);
+   const int edge = SignalDirectionalEdge(primary);
+   const string nextGate = SignalNextGate(primary, primaryReady, requiredQuality, !g_newsBlocked);
 
    double atrValues[3];
    double atrPoints = 0.0;
@@ -2231,10 +2367,15 @@ string BuildBridgeTelemetry()
    const double profitFactor = (grossLoss > 0.0 ? grossProfit / grossLoss : (grossProfit > 0.0 ? 99.0 : 0.0));
    const double equity = AccountInfoDouble(ACCOUNT_EQUITY);
    const double drawdown = (g_peakEquity > 0.0 ? 100.0 * MathMax(0.0, g_peakEquity - equity) / g_peakEquity : 0.0);
-   const string signalReason = (primaryReady ? (primary.direction == 0 ? primary.veto : primary.reason) : "Market data loading");
+   const string signalReason = (signalQualified ?
+      (level == "STRONG" ? "Strong multi-timeframe confluence confirmed" : "Qualified confluence confirmed") :
+      nextGate);
+   double planEntry = 0.0, planSl = 0.0, planTp = 0.0, planRr = 0.0;
+   const bool planReady = signalQualified && BuildTelemetryPlan(symbol, primaryProfile, primary,
+                                                                planEntry, planSl, planTp, planRr);
 
    string json = "{";
-   json += "\"ea\":{\"name\":\"SevenzEA\",\"version\":\"1.44\",\"mode\":\"READ_ONLY_TELEMETRY\"},";
+   json += "\"ea\":{\"name\":\"SevenzEA\",\"version\":\"1.45\",\"mode\":\"READ_ONLY_TELEMETRY\"},";
    json += "\"symbol\":\"" + JsonEscape(symbol) + "\",";
    json += "\"serverTime\":" + IntegerToString((long)TimeTradeServer()) + ",";
    json += "\"market\":{";
@@ -2245,20 +2386,36 @@ string BuildBridgeTelemetry()
    json += "},";
    json += "\"signal\":{";
    json += "\"bias\":\"" + JsonEscape(bias) + "\",";
+   json += "\"level\":\"" + JsonEscape(level) + "\",";
+   json += "\"profile\":\"" + (primaryProfile == PROFILE_SCALPING ? "SCALP" : "INTRADAY") + "\",";
    json += "\"score\":" + IntegerToString(primaryReady ? primary.quality : 0) + ",";
+   json += "\"progress\":" + IntegerToString(progress) + ",";
    json += "\"votes\":" + IntegerToString(primaryReady ? primary.votes : 0) + ",";
    json += "\"requiredVotes\":" + IntegerToString(InpMinConfluenceVotes) + ",";
    json += "\"threshold\":" + IntegerToString(requiredQuality) + ",";
    json += "\"qualified\":" + JsonBool(signalQualified) + ",";
    json += "\"regime\":\"" + JsonEscape(primaryReady ? primary.regime : g_lastRegime) + "\",";
    json += "\"reason\":\"" + JsonEscape(signalReason) + "\",";
+   json += "\"nextGate\":\"" + JsonEscape(nextGate) + "\",";
+   json += "\"directionalEdge\":" + IntegerToString(edge) + ",";
    json += "\"longScore\":" + IntegerToString(primaryReady ? primary.long_score : g_lastLongScore) + ",";
    json += "\"shortScore\":" + IntegerToString(primaryReady ? primary.short_score : g_lastShortScore) + ",";
    json += "\"timeframes\":[";
-   json += "{\"timeframe\":\"M1\",\"bias\":\"" + JsonEscape(BridgeSignalBias(scalpSignal, scalpReady)) + "\",\"reason\":\"Active scalp\"},";
-   json += "{\"timeframe\":\"M5\",\"bias\":\"" + JsonEscape(BridgeSignalBias(scalpSignal, scalpReady)) + "\",\"reason\":\"Scalp confirmation\"},";
-   json += "{\"timeframe\":\"M15\",\"bias\":\"" + JsonEscape(BridgeSignalBias(intradaySignal, intradayReady)) + "\",\"reason\":\"Intraday anchor\"}";
+   json += "{\"timeframe\":\"M1\",\"bias\":\"" + JsonEscape(BridgeDisplayBias(scalpSignal, scalpReady, SignalPassesCoreGates(scalpSignal, scalpReady, requiredQuality) && !g_newsBlocked)) + "\",\"score\":" + IntegerToString(scalpReady ? scalpSignal.quality : 0) + ",\"level\":\"" + JsonEscape(SignalLevel(scalpSignal, scalpReady, requiredQuality, !g_newsBlocked)) + "\",\"reason\":\"M1 trigger / M5 confirm\"},";
+   json += "{\"timeframe\":\"M5\",\"bias\":\"" + JsonEscape(BridgeDisplayBias(m5Signal, m5Ready, SignalPassesCoreGates(m5Signal, m5Ready, requiredQuality) && !g_newsBlocked)) + "\",\"score\":" + IntegerToString(m5Ready ? m5Signal.quality : 0) + ",\"level\":\"" + JsonEscape(SignalLevel(m5Signal, m5Ready, requiredQuality, !g_newsBlocked)) + "\",\"reason\":\"M5 structure / M15 confirm\"},";
+   json += "{\"timeframe\":\"M15\",\"bias\":\"" + JsonEscape(BridgeDisplayBias(intradaySignal, intradayReady, SignalPassesCoreGates(intradaySignal, intradayReady, requiredQuality) && !g_newsBlocked)) + "\",\"score\":" + IntegerToString(intradayReady ? intradaySignal.quality : 0) + ",\"level\":\"" + JsonEscape(SignalLevel(intradaySignal, intradayReady, requiredQuality, !g_newsBlocked)) + "\",\"reason\":\"M15 entry / H1 confirm\"},";
+   json += "{\"timeframe\":\"H1\",\"bias\":\"" + JsonEscape(BridgeDisplayBias(h1Signal, h1Ready, SignalPassesCoreGates(h1Signal, h1Ready, requiredQuality) && !g_newsBlocked)) + "\",\"score\":" + IntegerToString(h1Ready ? h1Signal.quality : 0) + ",\"level\":\"" + JsonEscape(SignalLevel(h1Signal, h1Ready, requiredQuality, !g_newsBlocked)) + "\",\"reason\":\"H1 trend / H4 anchor\"}";
    json += "]},";
+   json += "\"plan\":{";
+   json += "\"ready\":" + JsonBool(planReady);
+   if(planReady)
+     {
+      json += ",\"entry\":" + DoubleToString(planEntry, (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS));
+      json += ",\"stopLoss\":" + DoubleToString(planSl, (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS));
+      json += ",\"takeProfit\":" + DoubleToString(planTp, (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS));
+      json += ",\"riskReward\":" + DoubleToString(planRr, 2);
+     }
+   json += "},";
    json += "\"news\":{";
    json += "\"clear\":" + JsonBool(!g_newsBlocked) + ",";
    json += "\"title\":\"" + JsonEscape(g_newsEventName) + "\",";

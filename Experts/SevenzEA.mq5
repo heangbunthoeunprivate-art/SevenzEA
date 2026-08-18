@@ -1,6 +1,6 @@
 #property copyright "SevenzEA"
-#property version   "1.42"
-#property description "XAUUSD Active Execution: M1/M5 scalp, broker-aware risk and visible order diagnostics"
+#property version   "1.43"
+#property description "XAUUSD Reference Hybrid Active: M15/M5/M1 confluence, M5 execution and adaptive spread control"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -23,6 +23,7 @@ input string              InpSymbols                 = "XAUUSD";
 input bool                InpXauOnlyMode             = true;
 input ENUM_SEVENZ_PROFILE InpProfile                 = PROFILE_BOTH;
 input bool                InpUseM1ActiveScalp        = true;
+input bool                InpUseReferenceHybridActive = true;
 input int                 InpTimerSeconds            = 2;
 input long                InpMagicBase               = 770100;
 
@@ -39,9 +40,9 @@ input bool                InpStopAtDailyProfitTarget = true;
 input bool                InpCloseAtDailyTarget      = true;
 input bool                InpRequireUsdAccount       = true;
 input double              InpTargetCloseBufferMoney = 2.00;
-input int                 InpCooldownMinutes         = 20;
+input int                 InpCooldownMinutes         = 5;
 input int                 InpMaxForexSpreadPoints    = 35;
-input int                 InpMaxMetalSpreadPoints    = 250;
+input int                 InpMaxMetalSpreadPoints    = 35;
 input int                 InpMaxSlippagePoints       = 20;
 input bool                InpOnePositionPerSymbol    = true;
 
@@ -75,7 +76,7 @@ input bool                InpUseAsiaSession          = true;
 input int                 InpAsiaStartUtc            = 0;
 input int                 InpAsiaEndUtc              = 6;
 input double              InpAsiaRiskFactor          = 0.50;
-input int                 InpAsiaQualityBonus        = 5;
+input int                 InpAsiaQualityBonus        = 0;
 input int                 InpLondonStartUtc          = 7;
 input int                 InpLondonEndUtc            = 16;
 input int                 InpNewYorkStartUtc         = 12;
@@ -94,6 +95,9 @@ input bool                InpUseVolatilityGuard      = true;
 input int                 InpAtrAverageBars          = 50;
 input double              InpMaxAtrSpikeRatio        = 2.20;
 input double              InpMaxSpreadToAtrRatio     = 0.12;
+input bool                InpUseSpreadSurgeGuard     = true;
+input double              InpSpreadSurgeMultiplier  = 1.70;
+input int                 InpSpreadWarmupSamples     = 10;
 
 input group "=== Hybrid regime and entries ==="
 input int                 InpFastEmaPeriod           = 20;
@@ -124,6 +128,14 @@ input int                 InpMacdSignalPeriod        = 9;
 input double              InpMinCandleBodyAtr        = 0.12;
 input double              InpMaxEntryDistanceAtr     = 0.90;
 
+input group "=== Reference Hybrid Active profile ==="
+input int                 InpReferenceMinAlignment   = 2;
+input double              InpReferenceAdxMin         = 14.0;
+input double              InpReferenceRsiLow         = 30.0;
+input double              InpReferenceRsiHigh        = 70.0;
+input double              InpReferencePullbackAtr    = 1.50;
+input bool                InpReferenceSkipCandleConfirm = true;
+
 input group "=== Stops and management ==="
 input double              InpScalpStopAtr            = 1.40;
 input double              InpScalpTakeAtr            = 1.80;
@@ -138,7 +150,7 @@ input double              InpTrailAtrMultiplier      = 1.20;
 
 input group "=== Manual protection ==="
 input bool                InpPauseNewEntries         = false;
-input string              InpOrderComment            = "SevenzEA-v1.42";
+input string              InpOrderComment            = "SevenzEA-v1.43";
 
 input group "=== On-chart control panel ==="
 input bool                InpShowControlPanel        = true;
@@ -146,7 +158,7 @@ input ENUM_BASE_CORNER    InpPanelCorner             = CORNER_LEFT_UPPER;
 input int                 InpPanelX                  = 12;
 input int                 InpPanelY                  = 28;
 input int                 InpPanelWidth              = 300;
-input int                 InpQualityThreshold        = 65;
+input int                 InpQualityThreshold        = 60;
 input double              InpDailyProfitTargetMoney  = 50.00;
 
 struct SymbolState
@@ -201,6 +213,11 @@ string      g_lastIqVeto       = "Market data loading";
 string      g_lastVolumeReason = "Waiting for qualified order";
 double      g_lastVolume       = 0.0;
 double      g_lastRiskMoney    = 0.0;
+double      g_spreadSamples[30];
+int         g_spreadSampleIndex = 0;
+int         g_spreadSampleCount = 0;
+datetime    g_lastSpreadSample = 0;
+double      g_lastSpreadMedian = 0.0;
 
 #define PANEL_PREFIX "SEVENZ_PANEL_"
 
@@ -224,7 +241,8 @@ int OnInit()
    CreateControlPanel();
    UpdateChartStatus();
    UpdateNewsGuard(true);
-   Print("SevenzEA v1.42 XAUUSD Active Execution initialized. Symbols=", ArraySize(g_states),
+   ArrayInitialize(g_spreadSamples, 0.0);
+   Print("SevenzEA v1.43 Reference Hybrid Active initialized. Symbols=", ArraySize(g_states),
          " execution=", InpEnableOrderExecution,
          " realAllowed=", InpAllowRealAccount);
    return INIT_SUCCEEDED;
@@ -261,6 +279,7 @@ void OnTimer()
    for(int i=0; i<ArraySize(g_states); i++)
      {
       const string symbol = g_states[i].symbol;
+      SampleSpread((int)SymbolInfoInteger(symbol, SYMBOL_SPREAD));
       if(InpProfile == PROFILE_SCALPING || InpProfile == PROFILE_BOTH)
          ProcessProfile(i, symbol, PROFILE_SCALPING, ScalpEntryTimeframe(), ScalpConfirmTimeframe());
 
@@ -404,8 +423,11 @@ void ProcessProfile(const int stateIndex,
                     const ENUM_TIMEFRAMES confirmTf)
   {
    const string profileName = (profile == PROFILE_SCALPING ?
-                               (InpUseM1ActiveScalp ? "M1SCALP" : "M5SCALP") : "INTRA");
-   const datetime currentBar = iTime(symbol, entryTf, 0);
+                               (InpUseReferenceHybridActive ? "HYBRID" :
+                                (InpUseM1ActiveScalp ? "M1SCALP" : "M5SCALP")) : "INTRA");
+   const ENUM_TIMEFRAMES evaluationTf =
+      (profile == PROFILE_SCALPING ? ScalpEvaluationTimeframe() : entryTf);
+   const datetime currentBar = iTime(symbol, evaluationTf, 0);
    if(currentBar <= 0)
       return;
 
@@ -427,14 +449,29 @@ void ProcessProfile(const int stateIndex,
    const int maxSpread = MaxSpreadForSymbol(symbol);
    if(spread <= 0 || spread > maxSpread)
      {
-      Print(symbol, ": blocked by spread ", spread, "/", maxSpread, " points");
+      g_status = symbol + " " + profileName + " blocked: spread " +
+                 IntegerToString(spread) + "/" + IntegerToString(maxSpread);
+      g_lastVolumeReason = "FILTER: spread " + IntegerToString(spread) + "/" +
+                           IntegerToString(maxSpread);
+      Print(g_status);
+      return;
+     }
+
+   string spreadReason;
+   if(!SpreadSurgeAllowed(spread, spreadReason))
+     {
+      g_status = symbol + " " + profileName + " blocked: " + spreadReason;
+      g_lastVolumeReason = "FILTER: " + spreadReason;
       return;
      }
 
    string volatilityReason;
-   if(!VolatilityAllowed(symbol, entryTf, volatilityReason))
+   const ENUM_TIMEFRAMES volatilityTf =
+      (profile == PROFILE_SCALPING ? ScalpVolatilityTimeframe() : entryTf);
+   if(!VolatilityAllowed(symbol, volatilityTf, volatilityReason))
      {
       g_status = symbol + " " + profileName + " blocked: " + volatilityReason;
+      g_lastVolumeReason = "FILTER: " + volatilityReason;
       return;
      }
 
@@ -455,6 +492,7 @@ void ProcessProfile(const int stateIndex,
    if(signal.direction == 0)
      {
       g_status = symbol + " " + profileName + " wait: " + signal.veto;
+      g_lastVolumeReason = "SIGNAL: " + signal.veto;
       return;
      }
 
@@ -462,6 +500,8 @@ void ProcessProfile(const int stateIndex,
      {
       g_status = symbol + " " + profileName + " blocked: votes " + IntegerToString(signal.votes) + "/" +
                  IntegerToString(InpMinConfluenceVotes);
+      g_lastVolumeReason = "FILTER: votes " + IntegerToString(signal.votes) + "/" +
+                           IntegerToString(InpMinConfluenceVotes);
       return;
      }
 
@@ -471,6 +511,8 @@ void ProcessProfile(const int stateIndex,
      {
       g_status = symbol + " " + profileName + " blocked: IQ " + IntegerToString(signal.quality) + "/" +
                  IntegerToString(requiredQuality);
+      g_lastVolumeReason = "FILTER: IQ " + IntegerToString(signal.quality) + "/" +
+                           IntegerToString(requiredQuality);
       return;
      }
 
@@ -478,6 +520,7 @@ void ProcessProfile(const int stateIndex,
    if(!MayPlaceOrder(symbol, safetyReason))
      {
       g_status = profileName + ": " + safetyReason;
+      g_lastVolumeReason = safetyReason;
       Print(symbol, ": signal blocked: ", safetyReason);
       return;
      }
@@ -501,6 +544,8 @@ bool BuildSignal(const string symbol,
    out.veto      = "No qualified setup";
    out.reason    = "";
 
+   const bool referenceHybrid = InpUseReferenceHybridActive &&
+                                entryTf == PERIOD_M1 && confirmTf == PERIOD_M5;
    const ENUM_TIMEFRAMES anchorTf = AnchorTimeframe(confirmTf);
    double fast[3], slow[3], confirmFast[3], confirmSlow[3], anchorEma[3];
    double adx[3], plusDi[3], minusDi[3], rsi[3], atr[3];
@@ -531,12 +576,14 @@ bool BuildSignal(const string symbol,
    const double high1  = rates[1].high;
    const double low1   = rates[1].low;
    out.atr             = atr[1];
-   out.trending        = adx[1] >= InpTrendAdxThreshold;
+   const double effectiveTrendAdx = (referenceHybrid ? InpReferenceAdxMin : InpTrendAdxThreshold);
+   out.trending        = adx[1] >= effectiveTrendAdx;
 
    if(out.atr <= 0.0)
       return false;
 
-   const bool transition = adx[1] > InpRangeAdxCeiling && adx[1] < InpTrendAdxThreshold;
+   const bool transition = !referenceHybrid &&
+                           adx[1] > InpRangeAdxCeiling && adx[1] < InpTrendAdxThreshold;
    out.regime = (out.trending ? "TREND" : transition ? "TRANSITION" : "RANGE");
    if(InpUseConfluenceEngine && InpBlockTransitionRegime && transition)
      {
@@ -568,6 +615,14 @@ bool BuildSignal(const string symbol,
    const bool macdSell = macdMain[1] < macdSignal[1] && macdMain[1] <= macdMain[2];
    const bool structureBuy = high1 > rates[2].high && low1 >= rates[2].low;
    const bool structureSell = low1 < rates[2].low && high1 <= rates[2].high;
+   const int buyAlignment = (entryBuy ? 1 : 0) + (confirmBuy ? 1 : 0) + (anchorBuy ? 1 : 0);
+   const int sellAlignment = (entrySell ? 1 : 0) + (confirmSell ? 1 : 0) + (anchorSell ? 1 : 0);
+   const bool referenceRsi = rsi[1] >= InpReferenceRsiLow && rsi[1] <= InpReferenceRsiHigh;
+   const bool referenceMomentumBuy = referenceRsi && rsi[1] >= rsi[2];
+   const bool referenceMomentumSell = referenceRsi && rsi[1] <= rsi[2];
+   const bool referencePullback = MathAbs(close1 - fast[1]) <= out.atr * InpReferencePullbackAtr;
+   const bool referenceBuyConfirm = InpReferenceSkipCandleConfirm || bullishBody || structureBuy;
+   const bool referenceSellConfirm = InpReferenceSkipCandleConfirm || bearishBody || structureSell;
 
    int buyScore = 0, sellScore = 0, buyVotes = 0, sellVotes = 0;
    bool buyCandidate = false, sellCandidate = false;
@@ -578,24 +633,34 @@ bool BuildSignal(const string symbol,
       AddConfluence(confirmBuy, 15, buyScore, buyVotes);
       AddConfluence(anchorBuy, 15, buyScore, buyVotes);
       AddConfluence(diBuy, 15, buyScore, buyVotes);
-      AddConfluence(momentumBuy, 10, buyScore, buyVotes);
+      AddConfluence(referenceHybrid ? referenceMomentumBuy : momentumBuy, 10, buyScore, buyVotes);
       AddConfluence(InpUseMacdConfirmation && macdBuy, 10, buyScore, buyVotes);
       AddConfluence(bullishBody, 10, buyScore, buyVotes);
       AddConfluence(structureBuy, 5, buyScore, buyVotes);
-      AddConfluence(notChasedBuy, 5, buyScore, buyVotes);
+      AddConfluence(referenceHybrid ? referencePullback : notChasedBuy, 5, buyScore, buyVotes);
 
       AddConfluence(entrySell, 15, sellScore, sellVotes);
       AddConfluence(confirmSell, 15, sellScore, sellVotes);
       AddConfluence(anchorSell, 15, sellScore, sellVotes);
       AddConfluence(diSell, 15, sellScore, sellVotes);
-      AddConfluence(momentumSell, 10, sellScore, sellVotes);
+      AddConfluence(referenceHybrid ? referenceMomentumSell : momentumSell, 10, sellScore, sellVotes);
       AddConfluence(InpUseMacdConfirmation && macdSell, 10, sellScore, sellVotes);
       AddConfluence(bearishBody, 10, sellScore, sellVotes);
       AddConfluence(structureSell, 5, sellScore, sellVotes);
-      AddConfluence(notChasedSell, 5, sellScore, sellVotes);
+      AddConfluence(referenceHybrid ? referencePullback : notChasedSell, 5, sellScore, sellVotes);
 
-      buyCandidate = entryBuy && confirmBuy && bullishBody && momentumBuy;
-      sellCandidate = entrySell && confirmSell && bearishBody && momentumSell;
+      if(referenceHybrid)
+        {
+         buyCandidate = buyAlignment >= InpReferenceMinAlignment &&
+                        referenceRsi && referencePullback && referenceBuyConfirm;
+         sellCandidate = sellAlignment >= InpReferenceMinAlignment &&
+                         referenceRsi && referencePullback && referenceSellConfirm;
+        }
+      else
+        {
+         buyCandidate = entryBuy && confirmBuy && bullishBody && momentumBuy;
+         sellCandidate = entrySell && confirmSell && bearishBody && momentumSell;
+        }
      }
    else
      {
@@ -638,9 +703,9 @@ bool BuildSignal(const string symbol,
 
    out.long_score = (int)MathMin(100.0, (double)buyScore);
    out.short_score = (int)MathMin(100.0, (double)sellScore);
-   const bool buyVeto = InpUseHigherTfVeto &&
+   const bool buyVeto = !referenceHybrid && InpUseHigherTfVeto &&
                         (out.trending ? !anchorBuy : anchorSell);
-   const bool sellVeto = InpUseHigherTfVeto &&
+   const bool sellVeto = !referenceHybrid && InpUseHigherTfVeto &&
                          (out.trending ? !anchorSell : anchorBuy);
 
    if(buyCandidate && !buyVeto && buyScore >= sellScore + InpMinDirectionalEdge)
@@ -648,7 +713,8 @@ bool BuildSignal(const string symbol,
       out.direction = 1;
       out.quality = out.long_score;
       out.votes = buyVotes;
-      out.reason = (out.trending ? "IQ-trend-buy" : "IQ-range-buy");
+      out.reason = (referenceHybrid ? "reference-hybrid-buy" :
+                    (out.trending ? "IQ-trend-buy" : "IQ-range-buy"));
       out.veto = "Passed";
      }
    else if(sellCandidate && !sellVeto && sellScore >= buyScore + InpMinDirectionalEdge)
@@ -656,7 +722,8 @@ bool BuildSignal(const string symbol,
       out.direction = -1;
       out.quality = out.short_score;
       out.votes = sellVotes;
-      out.reason = (out.trending ? "IQ-trend-sell" : "IQ-range-sell");
+      out.reason = (referenceHybrid ? "reference-hybrid-sell" :
+                    (out.trending ? "IQ-trend-sell" : "IQ-range-sell"));
       out.veto = "Passed";
      }
    else if((buyCandidate && buyVeto) || (sellCandidate && sellVeto))
@@ -705,6 +772,62 @@ ENUM_TIMEFRAMES ScalpEntryTimeframe()
 ENUM_TIMEFRAMES ScalpConfirmTimeframe()
   {
    return (InpUseM1ActiveScalp ? PERIOD_M5 : PERIOD_M15);
+  }
+
+ENUM_TIMEFRAMES ScalpEvaluationTimeframe()
+  {
+   return (InpUseReferenceHybridActive ? PERIOD_M5 : ScalpEntryTimeframe());
+  }
+
+ENUM_TIMEFRAMES ScalpVolatilityTimeframe()
+  {
+   return (InpUseReferenceHybridActive ? PERIOD_M5 : ScalpEntryTimeframe());
+  }
+
+void SampleSpread(const int spreadPoints)
+  {
+   if(spreadPoints <= 0 || TimeCurrent() == g_lastSpreadSample)
+      return;
+   g_lastSpreadSample = TimeCurrent();
+   g_spreadSamples[g_spreadSampleIndex] = (double)spreadPoints;
+   g_spreadSampleIndex = (g_spreadSampleIndex + 1) % 30;
+   if(g_spreadSampleCount < 30) g_spreadSampleCount++;
+  }
+
+double SpreadMedian()
+  {
+   if(g_spreadSampleCount <= 0) return 0.0;
+   double samples[];
+   ArrayResize(samples, g_spreadSampleCount);
+   for(int i=0; i<g_spreadSampleCount; i++) samples[i] = g_spreadSamples[i];
+   ArraySort(samples);
+   const int middle = g_spreadSampleCount / 2;
+   if((g_spreadSampleCount % 2) == 1) return samples[middle];
+   return 0.5 * (samples[middle - 1] + samples[middle]);
+  }
+
+bool SpreadSurgeAllowed(const int spreadPoints, string &reason)
+  {
+   SampleSpread(spreadPoints);
+   g_lastSpreadMedian = SpreadMedian();
+   if(!InpUseSpreadSurgeGuard)
+     {
+      reason = "spread surge guard disabled";
+      return true;
+     }
+   if(g_spreadSampleCount < InpSpreadWarmupSamples || g_lastSpreadMedian <= 0.0)
+     {
+      reason = "spread samples warming";
+      return true;
+     }
+   if((double)spreadPoints > g_lastSpreadMedian * InpSpreadSurgeMultiplier)
+     {
+      reason = "spread surge " + IntegerToString(spreadPoints) + "/med " +
+               DoubleToString(g_lastSpreadMedian, 0);
+      return false;
+     }
+   reason = "spread stable";
+   return true;
   }
 
 void ExecuteSignal(const string symbol,
@@ -1636,6 +1759,8 @@ bool ValidateInputs()
       InpNewsRefreshSeconds >= 10 &&
       InpAtrAverageBars >= 10 && InpMaxAtrSpikeRatio > 1.0 &&
       InpMaxSpreadToAtrRatio > 0.0 && InpMaxSpreadToAtrRatio < 1.0 &&
+      InpSpreadSurgeMultiplier > 1.0 &&
+      InpSpreadWarmupSamples >= 3 && InpSpreadWarmupSamples <= 30 &&
       InpQualityThreshold >= 0 && InpQualityThreshold <= 100 &&
       InpDailyProfitTargetMoney > 0.0 &&
       InpFastEmaPeriod > 1 && InpSlowEmaPeriod > InpFastEmaPeriod &&
@@ -1648,6 +1773,11 @@ bool ValidateInputs()
       InpMacdSignalPeriod > 1 &&
       InpMinCandleBodyAtr >= 0.0 && InpMinCandleBodyAtr < 1.0 &&
       InpMaxEntryDistanceAtr > 0.0 &&
+      InpReferenceMinAlignment >= 1 && InpReferenceMinAlignment <= 3 &&
+      InpReferenceAdxMin > 0.0 &&
+      InpReferenceRsiLow >= 0.0 && InpReferenceRsiHigh <= 100.0 &&
+      InpReferenceRsiLow < InpReferenceRsiHigh &&
+      InpReferencePullbackAtr > 0.0 &&
       InpAtrPeriod > 1 &&
       InpScalpStopAtr > 0.0 && InpScalpTakeAtr > 0.0 &&
       InpIntradayStopAtr > 0.0 && InpIntradayTakeAtr > 0.0;
@@ -1769,7 +1899,7 @@ void UpdateChartStatus()
    ReadTodayStats(trades, losses, pnl);
    const string accountMode =
       ((ENUM_ACCOUNT_TRADE_MODE)AccountInfoInteger(ACCOUNT_TRADE_MODE) == ACCOUNT_TRADE_MODE_REAL ? "REAL" : "DEMO/CONTEST");
-   Comment("SEVENZ EA v1.42 XAUUSD ACTIVE EXECUTION\n",
+   Comment("SEVENZ EA v1.43 REFERENCE HYBRID ACTIVE\n",
            "Account: ", accountMode, " | Execution: ", (InpEnableOrderExecution ? "ON" : "SIGNAL ONLY"), "\n",
            "Status: ", g_status, "\n",
            "Symbols: ", InpSymbols, "\n",
@@ -1782,7 +1912,7 @@ void CreateControlPanel()
    if(!InpShowControlPanel) return;
 
    PanelRect("BG", 0, 0, InpPanelWidth, 470, C'15,20,31', C'53,63,82');
-   PanelLabel("TITLE", 12, 10, "SEVENZ EA v1.42 | ACTIVE EXEC", clrGold, 10);
+   PanelLabel("TITLE", 12, 10, "SEVENZ EA v1.43 | HYBRID ACTIVE", clrGold, 10);
    PanelLabel("LINE1", 12, 38, "Initializing market data...", clrSilver, 9);
    PanelLabel("LINE2", 12, 58, "ADX", clrSilver, 9);
    PanelLabel("LINE3", 12, 78, "RSI", clrSilver, 9);
@@ -1819,6 +1949,7 @@ void UpdateControlPanel()
    double adxValue = 0.0, rsiValue = 0.0, atrPoints = 0.0;
    const ENUM_TIMEFRAMES scalpEntryTf = ScalpEntryTimeframe();
    const ENUM_TIMEFRAMES scalpConfirmTf = ScalpConfirmTimeframe();
+   const ENUM_TIMEFRAMES scalpVolatilityTf = ScalpVolatilityTimeframe();
    const bool scalpEnabled = g_runtimeScalp &&
                              (InpProfile == PROFILE_SCALPING || InpProfile == PROFILE_BOTH);
    const bool intradayEnabled = InpProfile == PROFILE_INTRADAY || InpProfile == PROFILE_BOTH;
@@ -1828,7 +1959,7 @@ void UpdateControlPanel()
                               BuildSignal(symbol, PERIOD_M15, PERIOD_H1, intradaySignal);
    const bool marketReady = ReadADX(symbol, scalpConfirmTf, adx, plusDi, minusDi) &&
                             ReadRSI(symbol, scalpEntryTf, rsi) &&
-                            ReadATR(symbol, scalpEntryTf, atr);
+                            ReadATR(symbol, scalpVolatilityTf, atr);
 
    if(marketReady)
      {
@@ -1852,7 +1983,8 @@ void UpdateControlPanel()
    g_lastRiskFactor = CombinedRiskFactor();
    const int requiredQuality = (int)MathMin(100.0, (double)(InpQualityThreshold +
                                             (IsAsiaSession() ? InpAsiaQualityBonus : 0)));
-   const string scalpLabel = (InpUseM1ActiveScalp ? "M1SCALP" : "M5SCALP");
+   const string scalpLabel = (InpUseReferenceHybridActive ? "HYBRID" :
+                              (InpUseM1ActiveScalp ? "M1SCALP" : "M5SCALP"));
    const string scalpLine = (scalpEnabled ? ProfilePanelSummary(scalpLabel, scalpSignal, scalpReady) : scalpLabel + " OFF");
    const string intradayLine = (intradayEnabled ? ProfilePanelSummary("INTRA", intradaySignal, intradayReady) : "INTRA     OFF");
    const string scalpGate = (scalpEnabled ? ProfileGateCode(scalpSignal, scalpReady, requiredQuality) : "OFF");
@@ -1861,8 +1993,12 @@ void UpdateControlPanel()
    PanelSet("LINE1", scalpLine, ProfilePanelColor(scalpSignal, scalpReady));
    PanelSet("LINE2", intradayLine, ProfilePanelColor(intradaySignal, intradayReady));
    PanelSet("LINE3", "ADX/RSI   " + DoubleToString(adxValue, 1) + " / " + DoubleToString(rsiValue, 1), clrLightSteelBlue);
-   PanelSet("LINE4", (InpUseM1ActiveScalp ? "ATR(M1)   " : "ATR(M5)   ") + DoubleToString(atrPoints, 1) + " pts  spike " + DoubleToString(g_lastAtrRatio, 2) + "x", g_lastAtrRatio <= InpMaxAtrSpikeRatio ? clrMediumSeaGreen : clrTomato);
-   PanelSet("LINE5", "Spread    " + IntegerToString(spread) + " pts  (max " + IntegerToString(maxSpread) + ")",
+   PanelSet("LINE4", (InpUseReferenceHybridActive ? "ATR(M5)   " :
+                      (InpUseM1ActiveScalp ? "ATR(M1)   " : "ATR(M5)   ")) +
+            DoubleToString(atrPoints, 1) + " pts  spike " + DoubleToString(g_lastAtrRatio, 2) + "x",
+            g_lastAtrRatio <= InpMaxAtrSpikeRatio ? clrMediumSeaGreen : clrTomato);
+   PanelSet("LINE5", "Spread    " + IntegerToString(spread) + " /" + IntegerToString(maxSpread) +
+            "  med " + DoubleToString(g_lastSpreadMedian, 0),
             spread <= maxSpread ? clrMediumSeaGreen : clrTomato);
    PanelSet("LINE6", "Session   " + CurrentSessionName() +
             (IsAsiaSession() ? "  risk x" + DoubleToString(InpAsiaRiskFactor, 2) : ""),
@@ -1883,7 +2019,9 @@ void UpdateControlPanel()
    PanelSet("LINE14", "Status    " + ShortPanelText(g_status, 34), clrMediumSeaGreen);
    const bool executionBlocked = StringFind(g_lastVolumeReason, "ERROR") >= 0 ||
                                  StringFind(g_lastVolumeReason, "LOT<MIN") >= 0 ||
-                                 StringFind(g_lastVolumeReason, "blocked") >= 0;
+                                 StringFind(g_lastVolumeReason, "blocked") >= 0 ||
+                                 StringFind(g_lastVolumeReason, "FILTER:") >= 0 ||
+                                 StringFind(g_lastVolumeReason, "LOCKED:") >= 0;
    PanelSet("LINE15", "Exec      " + ShortPanelText(g_lastVolumeReason, 34),
             executionBlocked ? clrTomato : clrMediumSeaGreen);
 

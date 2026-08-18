@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.43 — Reference Hybrid Active
+
+- Added M15/M5/M1 two-of-three direction alignment for the active profile.
+- Evaluates active entries once per M5 bar while retaining the closed M1 signal input.
+- Uses M5 ATR for active volatility and spread/ATR validation, fixing the overly strict M1 cost ratio.
+- Added a rolling-median spread-surge veto with a 1.7× default multiplier.
+- Added active defaults: ADX 14, RSI 30–70, pullback distance 1.5 ATR and IQ 60.
+- Removed the extra Asia IQ penalty from the active preset while retaining half risk and news protection.
+- Kept true Auto-Trade arming, one-position-per-symbol, broker-aware risk sizing and all real-account locks.
+
 ## 1.42 — Active Execution
 
 - Added M1 entry/M5 confirmation/M15 anchor active scalping.

@@ -4,10 +4,10 @@
 
 | Profile | Entry timeframe | Confirmation timeframe | Default stop | Default target |
 | --- | --- | --- | --- | --- |
-| Active Scalping | M1 | M5 (M15 anchor) | 1.40 ATR | 1.80 ATR |
+| Reference Hybrid Active | M1 signal, M5 evaluation | M5 confirmation (M15 anchor) | 1.40 ATR | 1.80 ATR |
 | Intraday | M15 | H1 | 1.80 ATR | 2.60 ATR |
 
-Signals are evaluated once per newly opened entry-timeframe bar and use the last fully closed candle.
+Reference Hybrid Active is evaluated once per newly opened M5 bar and uses closed M1/M5/M15 data. Intraday signals are evaluated once per M15 bar.
 
 ## Automatic regime selection
 
@@ -27,11 +27,13 @@ An entry must satisfy all of these gates:
 4. At least `InpMinConfluenceVotes` checks pass.
 5. The IQ score reaches `InpQualityThreshold`; Asia adds `InpAsiaQualityBonus`.
 
-Active defaults are 65/100, four votes and an eight-point directional edge. Asia adds five points, making its default threshold 70. The M1 entry profile increases evaluation opportunities while retaining the transition and higher-timeframe vetoes. It does not guarantee a trade count or profit every day.
+Reference Hybrid Active requires at least two of the M15/M5/M1 directions to agree, ADX 14 or higher, RSI inside 30–70 and price within 1.5 ATR of the M1 fast EMA. Candle confirmation is optional in this profile. Its defaults are 60/100, four votes and an eight-point directional edge. Asia uses the same IQ threshold but half risk. It does not guarantee a trade count or profit every day.
+
+The active cost guard uses M5 ATR instead of M1 ATR. A fixed 35-point XAUUSD spread limit remains active, and the order is also blocked when the current spread exceeds 1.7 times its rolling median after warm-up.
 
 ## Session context
 
-- Asia: 00:00–06:00 UTC, 50% normal risk and an extra five IQ points.
+- Asia: 00:00–06:00 UTC and 50% normal risk.
 - London: 07:00–16:00 UTC.
 - New York: 12:00–21:00 UTC.
 

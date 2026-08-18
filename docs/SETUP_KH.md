@@ -36,16 +36,26 @@ Daily Target កំណត់ `InpDailyProfitTargetMoney=50.00` និង `InpReq
 - Confluence Votes បន្ថយពី 6 មក 5 និង Directional Edge ពី 15 មក 10។
 - Transition Regime, Higher-Timeframe Veto, News Guard, Spread/ATR Guard និង Safety Locks នៅតែ ON។
 - Panel បង្ហាញ `SCALP` និង `INTRA` ដាច់ពីគ្នា។ Gate code: `TRANS` = Transition, `HTF` = Higher-Timeframe conflict, `EDGE` = Direction conflict, `V4/5` = Votes ខ្វះ, `Q65/70` = Score ខ្វះ និង `PASS` = Signal ឆ្លង IQ gate។
-- Balanced thresholds របស់ v1.41 ត្រូវបានរក្សាទុកក្នុង Changelog; សម្រាប់ Test ថ្មីប្រើ v1.42 Active Demo preset ខាងក្រោម។
+- Balanced thresholds របស់ v1.41 ត្រូវបានរក្សាទុកក្នុង Changelog; សម្រាប់ Test ថ្មីប្រើ v1.43 Reference Hybrid Demo preset ខាងក្រោម។
 
 ## 8. Active Execution v1.42
 
 - `InpUseM1ActiveScalp=true` ប្រើ M1 Entry, M5 Confirmation និង M15 Anchor។ Chart អាចទុកនៅ M15 ដដែល។
 - Active IQ Default គឺ Score 65, Votes 4 និង Directional Edge 8។ Asia ត្រូវការ Score 70។
 - Lot គណនាតាម `OrderCalcProfit` របស់ Broker ដើម្បីឱ្យ Estimated Stop Risk ត្រឹមត្រូវជាង Tick Formula ទូទៅ។
-- Demo preset `SevenzEA_v1.42_Active_Demo.set` មាន `InpDemoMinLotMode=true`។ បើ Calculated Lot តូចជាង 0.01 វាអាចប្រើ 0.01 លើ Demo និងបង្ហាញ Risk ពិតនៅ `Exec` line។
+- v1.42 បានណែនាំ Demo Minimum-Lot Mode។ ក្នុង version បច្ចុប្បន្ន សូមប្រើ `SevenzEA_v1.43_Reference_Hybrid_Demo.set`; វាមាន `InpDemoMinLotMode=true` ហើយបើ Calculated Lot តូចជាង 0.01 វាអាចប្រើ 0.01 លើ Demo និងបង្ហាញ Risk ពិតនៅ `Exec` line។
 - `LOT<MIN` មានន័យថា Lot តូចជាង Broker minimum ហើយ EA បាន Block។ `DEMO MIN 0.01 risk $...` មានន័យថា Demo Mode បានប្រើ Minimum Lot។
 - ក្រោយ Load preset ឬ Compile ត្រូវបើក MT5 Algo Trading និងចុច `AUTO-TRADE: ON` វិញ។
+
+## 9. Reference Hybrid Active v1.43
+
+- ប្រើ M15/M5/M1 Confluence ហើយត្រូវការយ៉ាងតិច 2 ក្នុង 3 Timeframes ស្របទិសគ្នា។
+- Signal ប្រើ M1 ប៉ុន្តែ EA វាយតម្លៃ និងអាច Execute ម្តងក្នុង M5 bar ដើម្បីកាត់បន្ថយ Noise និងការចូលជាប់គ្នាលឿនពេក។
+- Active Default: ADX 14, RSI 30–70, Pullback 1.5 ATR, IQ 60, Votes 4 និង Directional Edge 8។
+- Spread Guard ប្រើ Max 35 points និងបិទ Entry បើ Spread ឡើងលើស 1.7 ដងនៃ Median។ Spread/ATR គណនាជាមួយ ATR(M5) មិនមែន ATR(M1) ទៀតទេ។
+- Asia នៅតែ Risk 50% ប៉ុន្តែមិនបន្ថែម IQ penalty។ News Guard នៅតែ ON។
+- សម្រាប់ Demo សូម Load `SevenzEA_v1.43_Reference_Hybrid_Demo.set` រួចបើក Algo Trading និងចុច `AUTO-TRADE: ON`។
+- `AUTO-TRADE: OFF` របស់ SevenzEA គឺ Lock ពិត និងមិនអាចបើក Order បានទេ។
 
 ## 3. Safety Lock ដំបូង
 

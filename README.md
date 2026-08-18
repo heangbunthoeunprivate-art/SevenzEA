@@ -1,11 +1,11 @@
-# SevenzEA v1.42 — XAUUSD Active Execution
+# SevenzEA v1.43 — Reference Hybrid Active
 
-SevenzEA is a new, standalone MQL5 Expert Advisor for MetaTrader 5, focused on XAUUSD. It does not reuse the source code, configuration, or strategy from any earlier bot.
+SevenzEA is a standalone MQL5 Expert Advisor for MetaTrader 5 focused on XAUUSD. v1.43 uses the supplied reference EA only to compare execution behavior; its source was not copied, and SevenzEA retains its own safety architecture.
 
 ## Trading design
 
 - Market: XAUUSD/Gold only by default. Broker suffixes such as `XAUUSD.a` are supported through `InpSymbols`.
-- Profiles: Active Scalping (`M1` entry + `M5` confirmation + `M15` anchor) and Intraday (`M15` entry + `H1` confirmation + `H4` anchor). M5/M15 legacy scalping remains selectable.
+- Profiles: Reference Hybrid Active (`M1` signal + `M5` confirmation + `M15` anchor, evaluated once per M5 bar) and Intraday (`M15` entry + `H1` confirmation + `H4` anchor).
 - Explainable IQ engine: every setup receives separate Long and Short scores from nine confluence checks.
 - Regime detection: ADX classifies Trend, Range or Transition; the uncertain Transition zone is blocked by default.
 - Trend entries: entry/confirmation EMA alignment, H1/H4 anchor bias, ADX/DI, RSI, MACD, candle body, structure and anti-chase distance.
@@ -14,7 +14,7 @@ SevenzEA is a new, standalone MQL5 Expert Advisor for MetaTrader 5, focused on X
 - Broker-aware sizing: `OrderCalcProfit` calculates the exact estimated stop-loss amount using the broker's symbol contract before every order.
 - Demo Minimum-Lot Mode can lift a sub-minimum calculated volume to the broker's minimum on non-real accounts only, with the actual estimated risk shown on the panel.
 - Exits: ATR-based stop loss/take profit, break-even and ATR trailing stop.
-- Asia context uses 00:00–06:00 UTC with half risk and a five-point higher IQ requirement; London and New York retain normal risk.
+- Asia context uses 00:00–06:00 UTC with half risk. v1.43 removes the extra Asia IQ penalty from the active preset while retaining the news and spread guards.
 - High-impact calendar protection covers USD plus CNY/JPY/AUD when Asia protection is enabled.
 - On-chart control panel shows live bias, quality, ADX, RSI, ATR, spread, session, daily P&L, positions, balance/equity, daily target, win rate, profit factor, average P&L and safety status.
 - Panel controls: Pause/Resume, Scalping toggle, Auto-Trade arm, Quality filter, double-confirm Close All and protected Reset Day.
@@ -68,6 +68,10 @@ This release retunes the entry gate from 78/6/15 to a more practical 70-point sc
 
 This release adds M1/M5 active scalping, active 65/4/8 IQ defaults, broker-aware money-risk sizing, explicit `LOT<MIN`/risk diagnostics and a non-real-account Demo Minimum-Lot Mode. It retains the one-position, six-trade, target, news, session, volatility and drawdown locks. See [docs/V1_42_ACTIVE_EXECUTION.md](docs/V1_42_ACTIVE_EXECUTION.md).
 
+### v1.43 Reference Hybrid Active
+
+This release fixes the M1 spread/ATR blocker by evaluating the active profile once per M5 bar and using M5 ATR for execution-cost protection. It adds two-of-three M15/M5/M1 alignment, a 14 ADX floor, 30–70 RSI window, 1.5 ATR pullback allowance, a 60-point IQ floor and a 1.7× rolling-median spread-surge veto. It does not copy the reference bot's unsafe always-live behavior, 500-trade cap, rapid stacking or forced minimum-lot sizing. See [docs/V1_43_REFERENCE_HYBRID_ACTIVE.md](docs/V1_43_REFERENCE_HYBRID_ACTIVE.md).
+
 ## Install
 
 1. Copy `Experts/SevenzEA.mq5` to `MT5 Data Folder/MQL5/Experts/SevenzEA.mq5`.
@@ -75,7 +79,7 @@ This release adds M1/M5 active scalping, active 65/4/8 IQ defaults, broker-aware
 3. Restart or refresh MT5 Navigator.
 4. Attach the EA to one chart. The chart symbol does not limit scanning.
 5. Enter the broker's exact symbol names in `InpSymbols` (including suffixes such as `XAUUSD.a`).
-6. Load `Presets/SevenzEA_Safe_Start.set` for signal-only setup, or `Presets/SevenzEA_v1.42_Active_Demo.set` for Demo execution. The Demo preset cannot authorize a real account.
+6. Load `Presets/SevenzEA_Safe_Start.set` for signal-only setup, or `Presets/SevenzEA_v1.43_Reference_Hybrid_Demo.set` for Demo execution. The Demo preset cannot authorize a real account.
 7. Enable Algo Trading only after Strategy Tester and demo validation.
 
 Khmer setup instructions are in [docs/SETUP_KH.md](docs/SETUP_KH.md). Strategy and safety details are in [docs/STRATEGY.md](docs/STRATEGY.md) and [docs/SAFETY.md](docs/SAFETY.md).

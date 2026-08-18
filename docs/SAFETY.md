@@ -28,7 +28,7 @@ The daily equity baseline and peak-equity watermark are stored in MT5 terminal g
 
 `InpDailyProfitTargetMoney=50.00` is measured in the account deposit currency. `InpRequireUsdAccount=true` blocks Auto-Trade unless the account currency is USD, making the target exactly $50. v1.30 sends the position-close request when equity reaches the $50 target plus the configured execution buffer. SevenzEA then disarms Auto-Trade and blocks new orders for the rest of that broker-server day. This target is not a guaranteed realized return.
 
-v1.42 retains the configurable $2 equity buffer before sending the target close request, then reports realized P&L separately. It lowers risk after consecutive losses, applies an additional 50% risk factor in the Asia window, and blocks guarded high-impact USD/CNY/JPY/AUD news, abnormal ATR/spread conditions and unconfigured UTC sessions.
+v1.43 retains the configurable $2 equity buffer before sending the target close request, then reports realized P&L separately. It lowers risk after consecutive losses, applies a 50% risk factor in the Asia window, and blocks guarded high-impact USD/CNY/JPY/AUD news, abnormal ATR conditions, fixed spread excess and spread surges. The active profile measures execution cost against M5 ATR rather than M1 ATR.
 
 `InpDemoMinLotMode` applies only to Demo/Contest accounts. When calculated risk volume is below the broker minimum, it may use the minimum lot and reports the larger actual estimated stop risk. It never authorizes a real account and should not be copied into a real-account preset without a separate risk review.
 
